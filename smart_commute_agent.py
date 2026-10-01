@@ -1,42 +1,41 @@
 """
-AI Smart Commute Agent
-----------------------
+SMART COMMUTE AI
+================
+ML + Goal-Based AI Agent + Planning
 
-A Goal-Based AI Agent that plans a journey from Home to University.
+Architecture:
+    Environment -> ML Predictor -> AI Planner -> Route Evaluation
+    -> Action -> New Environment State -> Re-planning
 
-The agent:
-1. Observes the environment.
-2. Generates possible routes.
-3. Evaluates routes using time, cost and risk.
-4. Chooses the best valid plan.
-5. Executes actions.
-6. Detects environmental changes.
-7. Re-plans when necessary.
+The ML model predicts travel time.
+The AI agent uses those predictions to choose a route.
 
-This is Classical / Symbolic AI, not Machine Learning.
+This is NOT an LLM agent. It combines:
+    - Machine Learning
+    - Search / Planning
+    - Goal-based reasoning
+    - Dynamic re-planning
 """
 
+import random
 from dataclasses import dataclass
-from typing import List, Dict, Set
+from typing import Dict, List, Set
+
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
 
 
 # ============================================================
-# 1. DATA STRUCTURES
+# 1. ROAD
 # ============================================================
 
 @dataclass
 class Road:
     destination: str
     mode: str
-    minutes: int
+    base_minutes: int       # normal/base travel time
     cost: float
-
-
-@dataclass
-class State:
-    location: str
-    time_used: int
-    money_spent: float
+    traffic: int = 0        # 0 = free, 1 = normal, 2 = heavy
 
 
 # ============================================================
@@ -48,629 +47,312 @@ class CommuteEnvironment:
     def __init__(self):
         self.city: Dict[str, List[Road]] = {}
         self.blocked_modes: Set[str] = set()
-
         self.build_city()
 
-    def connect(
-        self,
-        a: str,
-        b: str,
-        mode: str,
-        minutes: int,
-        cost: float
-    ):
-        """Create a two-way road."""
-
-        self.city.setdefault(a, []).append(
-            Road(b, mode, minutes, cost)
-        )
-
-        self.city.setdefault(b, []).append(
-            Road(a, mode, minutes, cost)
-        )
+    def connect(self, a, b, mode, minutes, cost, traffic=0):
+        self.city.setdefault(a, []).append(Road(b, mode, minutes, cost, traffic))
+        self.city.setdefault(b, []).append(Road(a, mode, minutes, cost, traffic))
 
     def build_city(self):
+        self.connect("Home", "Bus Stop", "walk", 5, 0.0)
+        self.connect("Home", "Metro A", "walk", 15, 0.0)
+        self.connect("Home", "University", "taxi", 25, 12.0)
+        self.connect("Bus Stop", "Metro A", "bus", 10, 0.5, traffic=1)
+        self.connect("Bus Stop", "University", "bus", 45, 0.6, traffic=2)
+        self.connect("Metro A", "Metro B", "metro", 12, 0.5)
+        self.connect("Metro A", "University", "taxi", 15, 8.0, traffic=1)
+        self.connect("Metro B", "University", "walk", 10, 0.0)
+        self.connect("Metro B", "University", "taxi", 4, 3.0, traffic=1)
 
-        # Walking
-        self.connect(
-            "Home",
-            "Bus Stop",
-            "walk",
-            5,
-            0.0
-        )
-
-        self.connect(
-            "Home",
-            "Metro A",
-            "walk",
-            15,
-            0.0
-        )
-
-        # Taxi
-        self.connect(
-            "Home",
-            "University",
-            "taxi",
-            25,
-            12.0
-        )
-
-        # Bus
-        self.connect(
-            "Bus Stop",
-            "Metro A",
-            "bus",
-            10,
-            0.5
-        )
-
-        self.connect(
-            "Bus Stop",
-            "University",
-            "bus",
-            45,
-            0.6
-        )
-
-        # Metro
-        self.connect(
-            "Metro A",
-            "Metro B",
-            "metro",
-            12,
-            0.5
-        )
-
-        # Taxi from Metro A
-        self.connect(
-            "Metro A",
-            "University",
-            "taxi",
-            15,
-            8.0
-        )
-
-        # Walking from Metro B
-        self.connect(
-            "Metro B",
-            "University",
-            "walk",
-            10,
-            0.0
-        )
-
-        # Taxi from Metro B
-        self.connect(
-            "Metro B",
-            "University",
-            "taxi",
-            4,
-            3.0
-        )
-
-    def close_mode(self, mode: str):
-        """Environment event: a transportation mode becomes unavailable."""
-
+    def close_mode(self, mode):
         self.blocked_modes.add(mode)
 
-    def is_available(self, road: Road) -> bool:
+    def is_available(self, road):
         return road.mode not in self.blocked_modes
 
 
 # ============================================================
-# 3. AI AGENT
+# 3. MACHINE LEARNING MODEL
+# ============================================================
+
+class TravelTimePredictor:
+    """
+    Learns: traffic + mode + base travel time -> predicted travel time
+    """
+
+    MODES = {"walk": 0, "bus": 1, "metro": 2, "taxi": 3}
+
+    def __init__(self):
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.train()
+
+    def train(self):
+        # Synthetic historical data.
+        # In a real project: Google Maps / traffic APIs / GPS / transport data.
+        random.seed(42)
+
+        traffic_multiplier = {0: 1.0, 1: 1.25, 2: 1.60}
+        mode_delay = {0: 0, 1: 2, 2: 0, 3: 4}   # walk, bus, metro, taxi
+
+        X, y = [], []
+
+        for _ in range(1000):
+            base_time = random.randint(5, 60)
+            traffic = random.randint(0, 2)
+            mode = random.randint(0, 3)
+            noise = random.uniform(-2, 2)
+
+            actual_time = (
+                base_time * traffic_multiplier[traffic]
+                + mode_delay[mode]
+                + noise
+            )
+
+            X.append([base_time, traffic, mode])
+            y.append(actual_time)
+
+        self.model.fit(np.array(X), np.array(y))
+
+    def mode_to_number(self, mode):
+        return self.MODES[mode]
+
+    def predict(self, road: Road):
+        features = np.array([[
+            road.base_minutes,
+            road.traffic,
+            self.mode_to_number(road.mode),
+        ]])
+        return round(float(self.model.predict(features)[0]), 1)
+
+
+# ============================================================
+# 4. AI AGENT
 # ============================================================
 
 class SmartCommuteAgent:
 
-    def __init__(
-        self,
-        environment: CommuteEnvironment,
-        start: str,
-        goal: str,
-        deadline: int,
-        budget: float,
-        strategy: str = "balanced"
-    ):
-
+    def __init__(self, environment, predictor, start, goal,
+                 deadline, budget, strategy="balanced"):
         self.environment = environment
-
-        self.state = State(
-            location=start,
-            time_used=0,
-            money_spent=0.0
-        )
-
+        self.predictor = predictor
+        self.location = start
         self.goal = goal
         self.deadline = deadline
         self.budget = budget
         self.strategy = strategy
+        self.time_used = 0
+        self.money_spent = 0
+        self.plan = []
 
-        self.plan: List[Road] = []
+    # ---------------- Goal test ----------------
 
-    # ========================================================
-    # GOAL TEST
-    # ========================================================
+    def goal_reached(self):
+        return self.location == self.goal
 
-    def goal_reached(self) -> bool:
-        return self.state.location == self.goal
-
-    # ========================================================
-    # STATE OBSERVATION
-    # ========================================================
+    # ---------------- Observation ----------------
 
     def observe(self):
-        print("\n🧠 AI OBSERVATION")
-        print(f"   Location      : {self.state.location}")
-        print(f"   Time used     : {self.state.time_used} min")
-        print(f"   Money spent   : {self.state.money_spent:.2f} AZN")
-        print(f"   Time left     : "
-              f"{self.deadline - self.state.time_used} min")
-        print(f"   Budget left   : "
-              f"{self.budget - self.state.money_spent:.2f} AZN")
+        print("\n🧠 AGENT OBSERVATION")
+        print(f"Location: {self.location}")
+        print(f"Time used: {self.time_used:.1f} min")
+        print(f"Money spent: {self.money_spent:.2f} AZN")
+        print(f"Remaining time: {self.deadline - self.time_used:.1f} min")
+        print(f"Remaining budget: {self.budget - self.money_spent:.2f} AZN")
 
         if self.environment.blocked_modes:
-            print(
-                f"   Blocked modes : "
-                f"{', '.join(self.environment.blocked_modes)}"
-            )
+            print("Blocked modes:", self.environment.blocked_modes)
 
-    # ========================================================
-    # ROUTE SCORING
-    # ========================================================
+    # ---------------- Route score ----------------
 
-    def evaluate_route(
-        self,
-        minutes: int,
-        cost: float
-    ) -> float:
-
+    def score(self, time, cost):
         if self.strategy == "fastest":
-            return minutes
-
+            return time
         if self.strategy == "cheapest":
             return cost
+        return time + 5 * cost   # balanced
 
-        # Balanced strategy
-        #
-        # 1 AZN = approximately 5 minutes
-        return minutes + 5 * cost
+    # ---------------- Planning ----------------
 
-    # ========================================================
-    # AI PLANNING
-    # ========================================================
+    def make_plan(self):
+        print("\n🔎 AI PLANNER")
+        print("Searching possible future states...")
 
-    def plan_route(self):
-
-        print("\n🔎 AI PLANNING")
-        print("   Searching possible futures...")
-
-        best_route = None
+        best_plan = None
         best_score = float("inf")
 
-        # location, route, total time, total cost
-        stack = [
-            (
-                self.state.location,
-                [],
-                self.state.time_used,
-                self.state.money_spent
-            )
-        ]
-
-        visited_paths = 0
+        stack = [(self.location, [], self.time_used, self.money_spent)]
 
         while stack:
+            place, route, current_time, current_cost = stack.pop()
 
-            location, route, total_time, total_cost = stack.pop()
+            # Goal reached
+            if place == self.goal:
+                route_time = current_time - self.time_used
+                route_cost = current_cost - self.money_spent
+                route_score = self.score(route_time, route_cost)
 
-            # ------------------------------------------------
-            # GOAL TEST
-            # ------------------------------------------------
-
-            if location == self.goal:
-
-                route_time = total_time - self.state.time_used
-                route_cost = total_cost - self.state.money_spent
-
-                score = self.evaluate_route(
-                    route_time,
-                    route_cost
-                )
-
-                visited_paths += 1
-
-                if score < best_score:
-                    best_score = score
-                    best_route = route
-
+                if route_score < best_score:
+                    best_score = route_score
+                    best_plan = route
                 continue
 
-            # ------------------------------------------------
-            # EXPAND POSSIBLE ACTIONS
-            # ------------------------------------------------
+            # Explore possible actions
+            for road in self.environment.city.get(place, []):
 
-            for road in self.environment.city.get(location, []):
-
-                # Transportation unavailable
                 if not self.environment.is_available(road):
                     continue
 
-                new_time = total_time + road.minutes
-                new_cost = total_cost + road.cost
+                # ML prediction
+                new_time = current_time + self.predictor.predict(road)
+                new_cost = current_cost + road.cost
 
-                # Deadline constraint
-                if new_time > self.deadline:
-                    continue
-
-                # Budget constraint
-                if new_cost > self.budget:
+                # Constraints
+                if new_time > self.deadline or new_cost > self.budget:
                     continue
 
                 # Avoid cycles
-                locations_in_route = {
-                    self.state.location
-                }
-
-                for previous_road in route:
-                    locations_in_route.add(
-                        previous_road.destination
-                    )
-
-                if road.destination in locations_in_route:
+                visited = {self.location} | {r.destination for r in route}
+                if road.destination in visited:
                     continue
 
-                new_route = route + [road]
+                stack.append((road.destination, route + [road], new_time, new_cost))
 
-                stack.append(
-                    (
-                        road.destination,
-                        new_route,
-                        new_time,
-                        new_cost
-                    )
-                )
-
-        if best_route is None:
-
-            print("   ❌ No valid route found.")
-
+        if best_plan is None:
             return None
 
-        print(f"   ✓ {visited_paths} possible routes evaluated.")
+        print("✓ Best plan found")
+        print(f"✓ Score: {best_score:.2f}")
+        return best_plan
 
-        print(
-            f"   ✓ Best score: {best_score:.2f}"
-        )
-
-        return best_route
-
-    # ========================================================
-    # PLAN DISPLAY
-    # ========================================================
+    # ---------------- Show plan ----------------
 
     def show_plan(self, plan):
+        print("\n📋 AI SELECTED PLAN")
 
-        if not plan:
-            return
+        current = self.location
+        total_time = 0
+        total_cost = 0
 
-        total_time = sum(
-            road.minutes for road in plan
-        )
+        for i, road in enumerate(plan, 1):
+            predicted = self.predictor.predict(road)
+            total_time += predicted
+            total_cost += road.cost
 
-        total_cost = sum(
-            road.cost for road in plan
-        )
-
-        print("\n📋 SELECTED PLAN")
-
-        print(
-            f"   Estimated time : {total_time} min"
-        )
-
-        print(
-            f"   Estimated cost : {total_cost:.2f} AZN"
-        )
-
-        current = self.state.location
-
-        for index, road in enumerate(plan, 1):
-
-            print(
-                f"   {index}. "
-                f"{current} "
-                f"--[{road.mode}]--> "
-                f"{road.destination} "
-                f"({road.minutes} min, "
-                f"{road.cost:.2f} AZN)"
-            )
+            print(f"{i}. {current} --[{road.mode}]--> {road.destination}")
+            print(f"   ML predicted time: {predicted:.1f} min")
+            print(f"   Cost: {road.cost:.2f} AZN")
 
             current = road.destination
 
-    # ========================================================
-    # ACTION
-    # ========================================================
+        print("\nEstimated total:")
+        print(f"Time: {total_time:.1f} min")
+        print(f"Cost: {total_cost:.2f} AZN")
 
-    def execute_action(self, road: Road):
+    # ---------------- Execute action ----------------
 
-        print(
-            f"\n🤖 ACTION: "
-            f"{road.mode.upper()} "
-            f"{self.state.location} → "
-            f"{road.destination}"
-        )
+    def execute(self, road):
+        predicted_time = self.predictor.predict(road)
 
-        self.state.location = road.destination
+        print("\n🤖 ACTION")
+        print(f"{self.location} → {road.destination}")
+        print(f"Transport: {road.mode}")
+        print(f"ML predicted travel time: {predicted_time:.1f} min")
 
-        self.state.time_used += road.minutes
+        self.location = road.destination
+        self.time_used += predicted_time
+        self.money_spent += road.cost
 
-        self.state.money_spent += road.cost
-
-        print(
-            f"   State updated → "
-            f"{self.state.location}"
-        )
-
-    # ========================================================
-    # RE-PLANNING
-    # ========================================================
+    # ---------------- Re-planning ----------------
 
     def replan(self):
-
         print("\n🔄 RE-PLANNING")
-        print(
-            "   Environment changed."
-        )
+        print("The environment changed.")
+        print("AI is searching for a new route...")
 
-        print(
-            "   AI is generating a new plan "
-            "from the current state..."
-        )
+        self.plan = self.make_plan()
 
-        self.plan = self.plan_route()
-
-        if self.plan is not None:
+        if self.plan:
             self.show_plan(self.plan)
 
-    # ========================================================
-    # MAIN AGENT LOOP
-    # ========================================================
+    # ---------------- Run ----------------
 
     def run(self, events=None):
-
         events = events or {}
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 65)
         print("🤖 SMART COMMUTE AI AGENT")
-        print("=" * 60)
+        print("=" * 65)
+        print(f"Goal: {self.goal}")
+        print(f"Deadline: {self.deadline} min")
+        print(f"Budget: {self.budget:.2f} AZN")
+        print(f"Strategy: {self.strategy}")
 
-        print(
-            f"Goal      : {self.goal}"
-        )
-
-        print(
-            f"Deadline  : {self.deadline} minutes"
-        )
-
-        print(
-            f"Budget    : {self.budget:.2f} AZN"
-        )
-
-        print(
-            f"Strategy  : {self.strategy}"
-        )
-
-        # ----------------------------------------------------
-        # INITIAL OBSERVATION
-        # ----------------------------------------------------
-
+        # Initial observation and plan
         self.observe()
+        self.plan = self.make_plan()
 
-        # ----------------------------------------------------
-        # INITIAL PLANNING
-        # ----------------------------------------------------
-
-        self.plan = self.plan_route()
-
-        if self.plan is None:
-            print(
-                "\n❌ Mission failed."
-                "\nNo valid plan satisfies the constraints."
-            )
+        if not self.plan:
+            print("\n❌ No valid route.")
             return
 
         self.show_plan(self.plan)
 
-        # ----------------------------------------------------
-        # AGENT LOOP
-        # ----------------------------------------------------
-
+        # Agent loop
         while not self.goal_reached():
 
             if not self.plan:
-
                 self.replan()
 
                 if not self.plan:
-                    print(
-                        "\n❌ Agent cannot continue."
-                    )
+                    print("\n❌ Mission failed.")
                     return
 
-            # Select next action
-            next_action = self.plan.pop(0)
-
-            # Execute action
-            self.execute_action(next_action)
-
-            # Observe new state
+            action = self.plan.pop(0)
+            self.execute(action)
             self.observe()
 
-            # ------------------------------------------------
-            # ENVIRONMENT EVENT
-            # ------------------------------------------------
+            # Environment event
+            if self.location in events and not self.goal_reached():
+                closed = events[self.location]
 
-            if (
-                self.state.location in events
-                and not self.goal_reached()
-            ):
+                print("\n🚨 ENVIRONMENT CHANGE")
+                print(f"⚠️ {closed.upper()} is now unavailable!")
 
-                closed_mode = events[
-                    self.state.location
-                ]
-
-                print(
-                    "\n🚨 ENVIRONMENT EVENT"
-                )
-
-                print(
-                    f"   {closed_mode.upper()} "
-                    f"has become unavailable!"
-                )
-
-                self.environment.close_mode(
-                    closed_mode
-                )
-
-                # Re-plan
+                self.environment.close_mode(closed)
                 self.replan()
 
-        # ----------------------------------------------------
-        # FINAL RESULT
-        # ----------------------------------------------------
-
-        print("\n" + "=" * 60)
-
+        # Success
+        print("\n" + "=" * 65)
         print("🎯 GOAL REACHED")
-
-        print(
-            f"   Destination : {self.state.location}"
-        )
-
-        print(
-            f"   Total time  : {self.state.time_used} min"
-        )
-
-        print(
-            f"   Total cost  : "
-            f"{self.state.money_spent:.2f} AZN"
-        )
-
-        print(
-            f"   Time limit  : "
-            f"{self.deadline} min"
-        )
-
-        print(
-            f"   Budget      : "
-            f"{self.budget:.2f} AZN"
-        )
-
-        print("=" * 60)
+        print(f"Destination: {self.location}")
+        print(f"Total time: {self.time_used:.1f} min")
+        print(f"Total cost: {self.money_spent:.2f} AZN")
+        print(f"Deadline: {self.deadline} min")
+        print(f"Budget: {self.budget:.2f} AZN")
+        print("=" * 65)
 
 
 # ============================================================
-# 4. RUN AI EXPERIMENTS
+# 5. MAIN
 # ============================================================
 
 if __name__ == "__main__":
 
-    # --------------------------------------------------------
-    # EXPERIMENT 1
-    # Fastest strategy
-    # --------------------------------------------------------
+    print("Training ML travel-time predictor...")
+    predictor = TravelTimePredictor()
+    print("✓ ML model trained.")
 
     environment = CommuteEnvironment()
 
     agent = SmartCommuteAgent(
         environment=environment,
-        start="Home",
-        goal="University",
-        deadline=70,
-        budget=15,
-        strategy="fastest"
-    )
-
-    agent.run()
-
-
-    # --------------------------------------------------------
-    # EXPERIMENT 2
-    # Cheapest strategy
-    # --------------------------------------------------------
-
-    environment = CommuteEnvironment()
-
-    agent = SmartCommuteAgent(
-        environment=environment,
-        start="Home",
-        goal="University",
-        deadline=70,
-        budget=15,
-        strategy="cheapest"
-    )
-
-    agent.run()
-
-
-    # --------------------------------------------------------
-    # EXPERIMENT 3
-    # Balanced AI strategy
-    # --------------------------------------------------------
-
-    environment = CommuteEnvironment()
-
-    agent = SmartCommuteAgent(
-        environment=environment,
+        predictor=predictor,
         start="Home",
         goal="University",
         deadline=70,
         budget=5,
-        strategy="balanced"
+        strategy="balanced",
     )
 
-    agent.run()
-
-
-    # --------------------------------------------------------
-    # EXPERIMENT 4
-    # Dynamic environment + RE-PLANNING
-    # --------------------------------------------------------
-
-    environment = CommuteEnvironment()
-
-    agent = SmartCommuteAgent(
-        environment=environment,
-        start="Home",
-        goal="University",
-        deadline=70,
-        budget=5,
-        strategy="fastest"
-    )
-
-    agent.run(
-        events={
-            "Metro A": "metro"
-        }
-    )
-
-
-    # --------------------------------------------------------
-    # EXPERIMENT 5
-    # Impossible mission
-    # --------------------------------------------------------
-
-    environment = CommuteEnvironment()
-
-    agent = SmartCommuteAgent(
-        environment=environment,
-        start="Home",
-        goal="University",
-        deadline=20,
-        budget=1,
-        strategy="fastest"
-    )
-
-    agent.run()
+    # Run with dynamic environment
+    agent.run(events={"Metro A": "metro"})
