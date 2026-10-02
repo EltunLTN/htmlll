@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Robot tozsoran simulyasiyası</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eaf0ef;--panel:#fff;--ink:#14262b;--mute:#5d7378;--line:#d3dfde;--accent:#0f9d8a;--warn:#d9822b;--track:#e3ebea;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0c191c;--panel:#13262a;--ink:#e6f2f0;--mute:#8aa6aa;--line:#25393d;--accent:#3ed1b9;--warn:#f0a94b;--track:#1d3236}}
+:root[data-theme="dark"]{--bg:#0c191c;--panel:#13262a;--ink:#e6f2f0;--mute:#8aa6aa;--line:#25393d;--accent:#3ed1b9;--warn:#f0a94b;--track:#1d3236}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Bricolage Grotesque',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.45}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 16px 28px}
+h1{font-size:clamp(26px,4.4vw,40px);font-weight:800;letter-spacing:-.02em;margin:0 0 6px}
+.sub{color:var(--mute);margin:0 0 20px;max-width:62ch}
+.grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:18px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.stage{border-radius:18px;overflow:hidden;box-shadow:0 14px 40px rgba(10,30,34,.28);line-height:0;background:#c99a64}
+canvas{width:100%;display:block}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
+.panel h2{font-size:15px;font-weight:600;color:var(--mute);margin:0 0 10px}
+.agent p{margin:0 0 10px;font-size:15px}
+.agent b{display:inline-block;min-width:98px;font-weight:600;color:var(--accent)}
+.meter{margin:14px 0}
+.meter .row{display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px}
+.bar{height:12px;border-radius:99px;background:var(--track);overflow:hidden}
+.bar i{display:block;height:100%;width:100%;border-radius:99px;background:var(--accent);transition:width .25s linear,background .3s}
+.bar i.low{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.stats div{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.stats strong{display:block;font-size:24px;font-weight:800}
+.stats span{font-size:13px;color:var(--mute)}
+.ctl{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button,select{font:inherit;font-size:15px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:10px 16px;cursor:pointer}
+button.main{background:var(--accent);border-color:var(--accent);color:#06211d;font-weight:600}
+button:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Robot tozsoran</h1>
+  <p class="sub">Robot otaqdakı ən yaxın çirki tapıb təmizləyir. Batareyası azalanda və ya tozqabı dolanda özü dok stansiyasına qayıdır.</p>
+  <div class="grid">
+    <div class="stage"><canvas id="cv" aria-label="Robot tozsoranın otaqda təmizlik animasiyası"></canvas></div>
+    <div class="panel">
+      <div class="agent">
+        <h2>Agent nə edir</h2>
+        <p><b>Görür</b><span id="see"></span></p>
+        <p><b>Qərar verir</b><span id="decide"></span></p>
+        <p><b>Edir</b><span id="act"></span></p>
+      </div>
+      <div class="meter"><div class="row"><span>Batareya</span><span id="bt"></span></div><div class="bar"><i id="bb"></i></div></div>
+      <div class="meter"><div class="row"><span>Tozqabı</span><span id="bn"></span></div><div class="bar"><i id="bnb" style="width:0"></i></div></div>
+      <div class="stats">
+        <div><strong id="s1">0</strong><span>təmizləndi</span></div>
+        <div><strong id="s2">0</strong><span>addım</span></div>
+        <div><strong id="s3">0</strong><span>şarj</span></div>
+      </div>
+      <div class="ctl">
+        <button class="main" id="play">Dayandır</button>
+        <button id="reset">Yenidən</button>
+        <select id="spd" aria-label="Sürət"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const R=6,C=8,CAP=8,MAXB=40;
+const OBST=[[1,3],[2,3],[3,3],[4,5],[4,6]];
+const DIRT0=[[0,5,1],[0,7,2],[1,1,2],[1,7,2],[3,1,1],[3,4,1],[3,6,3],[4,3,2],[5,0,3],[5,3,2]];
+const key=(r,c)=>r+','+c, blocked=new Set(OBST.map(o=>key(o[0],o[1])));
+const free=(r,c)=>r>=0&&r<R&&c>=0&&c<C&&!blocked.has(key(r,c));
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d');
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let W,H,cs,S,running=true,speed=2;
+
+function bfs(start,goal){
+  if(goal(start[0],start[1]))return [];
+  const q=[start],prev=new Map([[key(start[0],start[1]),null]]);
+  for(let i=0;i<q.length;i++){
+    const [r,c]=q[i];
+    for(const [dr,dc] of [[-1,0],[1,0],[0,-1],[0,1]]){
+      const n=[r+dr,c+dc],k=key(n[0],n[1]);
+      if(free(n[0],n[1])&&!prev.has(k)){
+        prev.set(k,q[i]);
+        if(goal(n[0],n[1])){const p=[];let x=n;while(x[0]!==start[0]||x[1]!==start[1]){p.push(x);x=prev.get(key(x[0],x[1]));}return p.reverse();}
+        q.push(n);
+      }
+    }
+  }
+  return null;
+}
+function reset(){
+  S={pos:[0,0],battery:MAXB,bin:0,steps:0,rech:0,cleaned:0,dirt:new Map(DIRT0.map(d=>[key(d[0],d[1]),d[2]])),
+     queue:[],cur:null,done:false,ang:0,tang:0,shine:new Map(),trail:[[0,0]],parts:[],
+     see:'Otaq təmizlənməyə hazırdır',decide:'Ən yaxın çirki axtarır',act:'Dok stansiyasında gözləyir',charging:false};
+  running=true;ui();
+}
+function plan(){
+  const atDock=S.pos[0]===0&&S.pos[1]===0;
+  S.see=`Batareya ${S.battery}, tozqabı ${S.bin}/${CAP}, qalan çirk ${S.dirt.size}`;
+  if(!S.dirt.size){ if(!atDock)return trip('İş bitdi, dok stansiyasına qayıdır'); S.done=true;S.decide='Bütün çirk təmizləndi';S.act='Dok stansiyasında dincəlir';return; }
+  if(S.bin>=CAP)return trip('Tozqabı doludur, boşaltmağa gedir');
+  const path=bfs(S.pos,(r,c)=>S.dirt.has(key(r,c)));
+  if(!path){S.done=true;S.decide='Qalan çirkə çatmaq olmur';return;}
+  const t=path[path.length-1],back=bfs(t,(r,c)=>r===0&&c===0);
+  const need=path.length+back.length+2*S.dirt.get(key(t[0],t[1]));
+  if(need>S.battery)return trip('Batareya azdır, şarj olmağa gedir');
+  S.decide='Ən yaxın çirkə gedir';
+  path.forEach(p=>S.queue.push({k:'move',to:p,d:.3}));
+  S.queue.push({k:'clean',d:.3});
+}
+function trip(msg){
+  S.decide=msg;
+  bfs(S.pos,(r,c)=>r===0&&c===0).forEach(p=>S.queue.push({k:'move',to:p,d:.3}));
+  S.queue.push({k:'dock',d:1.3});
+}
+function start(a){
+  S.charging=a.k==='dock';
+  if(a.k==='move'){S.act='Hərəkət edir';S.tang=Math.atan2(a.to[0]-S.pos[0],a.to[1]-S.pos[1]);}
+  if(a.k==='clean'){a.lv=S.dirt.get(key(S.pos[0],S.pos[1]));a.d=.25+.3*a.lv;S.act='Təmizləyir';}
+  if(a.k==='dock'){S.act='Şarj olur, tozqabını boşaldır';}
+}
+function finish(a){
+  if(a.k==='move'){S.pos=a.to;S.battery--;S.steps++;S.trail.push(a.to);}
+  if(a.k==='clean'){const k=key(S.pos[0],S.pos[1]);S.bin+=a.lv;S.battery-=2*a.lv;S.cleaned++;S.dirt.delete(k);S.shine.set(k,performance.now()/1000);}
+  if(a.k==='dock'){S.battery=MAXB;S.bin=0;S.rech++;S.charging=false;S.trail=[[0,0]];}
+}
+function step(dt){
+  if(!S.cur){
+    if(!S.queue.length)plan();
+    if(S.done){running=false;ui();return;}
+    S.cur=S.queue.shift();S.cur.t=0;start(S.cur);ui();
+  }
+  S.cur.t+=dt;
+  if(S.cur.t>=S.cur.d){finish(S.cur);S.cur=null;ui();}
+}
+function ui(){
+  $('see').textContent=S.see;$('decide').textContent=S.decide;$('act').textContent=S.act;
+  $('bt').textContent=S.battery+' / '+MAXB;$('bn').textContent=S.bin+' / '+CAP;
+  const b=$('bb');b.style.width=(S.battery/MAXB*100)+'%';b.classList.toggle('low',S.battery<MAXB*.3);
+  $('bnb').style.width=Math.min(100,S.bin/CAP*100)+'%';
+  $('s1').textContent=S.cleaned;$('s2').textContent=S.steps;$('s3').textContent=S.rech;
+  $('play').textContent=S.done?'Yenidən başlat':(running?'Dayandır':'Davam et');
+}
+
+/* ---------- çəkmə ---------- */
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+const rnd=s=>{s=Math.sin(s*127.1)*43758.5453;return s-Math.floor(s);};
+function fit(){
+  const d=Math.min(devicePixelRatio||1,2);W=cv.clientWidth;cs=W/C;H=cs*R;
+  cv.style.height=H+'px';cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);
+}
+function floor(){
+  const ph=cs/4;
+  for(let i=0;i<R*4;i++){
+    ctx.fillStyle=i%2?'#c99a64':'#d4a673';ctx.fillRect(0,i*ph,W,ph);
+    ctx.fillStyle='rgba(80,48,20,.2)';ctx.fillRect(0,i*ph,W,1);
+    const off=(i%3)*cs*.9;for(let x=-off;x<W;x+=cs*2.7)ctx.fillRect(x,i*ph,1.2,ph);
+  }
+  ctx.save();ctx.shadowColor='rgba(0,0,0,.25)';ctx.shadowBlur=cs*.1;
+  ctx.fillStyle='#2f6670';rr(4.3*cs,3.35*cs,3.5*cs,2.45*cs,cs*.12);ctx.fill();ctx.restore();
+  ctx.strokeStyle='#ecdcb2';ctx.lineWidth=cs*.04;rr(4.42*cs,3.47*cs,3.26*cs,2.21*cs,cs*.08);ctx.stroke();
+}
+function furniture(){
+  ctx.save();ctx.shadowColor='rgba(0,0,0,.35)';ctx.shadowBlur=cs*.15;ctx.shadowOffsetY=cs*.05;
+  ctx.fillStyle='#4a5d73';rr(3.08*cs,1.06*cs,.84*cs,2.88*cs,cs*.16);ctx.fill();
+  ctx.shadowColor='transparent';
+  ctx.fillStyle='#3b4c60';rr(3.08*cs,1.06*cs,.26*cs,2.88*cs,cs*.12);ctx.fill();
+  ctx.fillStyle='#657b93';
+  for(let i=0;i<3;i++){rr(3.38*cs,(1.12+i*.95)*cs,.5*cs,.86*cs,cs*.08);ctx.fill();}
+  ctx.shadowColor='rgba(0,0,0,.35)';ctx.shadowBlur=cs*.15;ctx.shadowOffsetY=cs*.05;
+  ctx.fillStyle='#5a3b25';rr(5.08*cs,4.08*cs,1.84*cs,.84*cs,cs*.14);ctx.fill();ctx.restore();
+  ctx.strokeStyle='rgba(255,220,170,.25)';ctx.lineWidth=cs*.02;rr(5.14*cs,4.14*cs,1.72*cs,.72*cs,cs*.1);ctx.stroke();
+  ctx.fillStyle='#2f7a45';ctx.beginPath();ctx.arc(6.3*cs,4.5*cs,.2*cs,0,7);ctx.fill();
+  ctx.fillStyle='#4ea263';ctx.beginPath();ctx.arc(6.27*cs,4.46*cs,.12*cs,0,7);ctx.fill();
+}
+function dock(t){
+  ctx.fillStyle='#26363b';rr(.08*cs,.08*cs,.84*cs,.84*cs,cs*.18);ctx.fill();
+  ctx.fillStyle='#1a272b';rr(.2*cs,.3*cs,.6*cs,.5*cs,cs*.14);ctx.fill();
+  const on=S.charging?.6+.4*Math.sin(t*8):.35;
+  ctx.fillStyle=S.charging?`rgba(62,209,185,${on})`:'#55696e';ctx.beginPath();ctx.arc(.5*cs,.19*cs,.045*cs,0,7);ctx.fill();
+}
+function dust(r,c,lv,k){
+  for(let i=0;i<lv*6;i++){
+    const a=rnd(r*17+c*31+i*1.3),b=rnd(r*7+c*13+i*2.1),s=rnd(i+r+c);
+    ctx.fillStyle=i%3?'#5e4e3d':'#837360';
+    ctx.beginPath();ctx.arc((c+.18+.64*a)*cs,(r+.18+.64*b)*cs,cs*(.018+.032*s)*k,0,7);ctx.fill();
+  }
+}
+function robot(x,y,t){
+  const low=S.battery<MAXB*.3,cl=S.cur&&S.cur.k==='clean';
+  const ring=S.charging||cl?'#3ed1b9':(low?'#f0a94b':'#5aa9ff'),r=.36*cs;
+  ctx.save();ctx.translate(x,y);
+  ctx.fillStyle='rgba(0,0,0,.28)';ctx.beginPath();ctx.ellipse(r*.12,r*.2,r*1.02,r*.98,0,0,7);ctx.fill();
+  ctx.rotate(S.ang);
+  const g=ctx.createRadialGradient(-r*.3,-r*.3,r*.1,0,0,r);g.addColorStop(0,'#ffffff');g.addColorStop(1,'#cfdce0');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,r,0,7);ctx.fill();
+  ctx.strokeStyle='#8ea3a9';ctx.lineWidth=cs*.03;ctx.beginPath();ctx.arc(0,0,r,-.9,.9);ctx.stroke();
+  ctx.save();ctx.shadowColor=ring;ctx.shadowBlur=cs*.12*(S.charging?.6+.4*Math.sin(t*8):1);
+  ctx.strokeStyle=ring;ctx.lineWidth=cs*.035;ctx.beginPath();ctx.arc(0,0,r*.78,0,7);ctx.stroke();ctx.restore();
+  ctx.fillStyle='#eef5f6';ctx.beginPath();ctx.arc(-r*.08,0,r*.42,0,7);ctx.fill();
+  ctx.fillStyle='#8fa4aa';ctx.beginPath();ctx.arc(-r*.08,0,r*.16,0,7);ctx.fill();
+  if(cl){ctx.strokeStyle='#4a5d63';ctx.lineWidth=cs*.025;
+    for(const s of [-1,1]){const a=t*18*s;ctx.beginPath();ctx.moveTo(r*.95,s*r*.5);ctx.lineTo(r*.95+Math.cos(a)*r*.2,s*r*.5+Math.sin(a)*r*.2);ctx.stroke();}}
+  ctx.restore();
+}
+function draw(t){
+  ctx.clearRect(0,0,W,H);floor();
+  const now=performance.now()/1000;
+  // təmizlənmiş izlərin parıltısı
+  S.shine.forEach((t0,k)=>{
+    const a=1-(now-t0)/1.8;if(a<=0)return;const [r,c]=k.split(',').map(Number);
+    const g=ctx.createRadialGradient((c+.5)*cs,(r+.5)*cs,0,(c+.5)*cs,(r+.5)*cs,cs*.6);
+    g.addColorStop(0,`rgba(255,255,255,${.55*a})`);g.addColorStop(1,'rgba(255,255,255,0)');
+    ctx.fillStyle=g;ctx.fillRect(c*cs,r*cs,cs,cs);
+  });
+  // iz xətti
+  if(S.trail.length>1){ctx.strokeStyle='rgba(255,255,255,.4)';ctx.lineWidth=cs*.05;ctx.setLineDash([cs*.08,cs*.1]);ctx.beginPath();
+    S.trail.forEach((p,i)=>{const x=(p[1]+.5)*cs,y=(p[0]+.5)*cs;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.setLineDash([]);}
+  S.dirt.forEach((lv,k)=>{const [r,c]=k.split(',').map(Number);
+    const k2=S.cur&&S.cur.k==='clean'&&S.pos[0]===r&&S.pos[1]===c?1-S.cur.t/S.cur.d:1;dust(r,c,lv,Math.max(k2,0));});
+  dock(t);furniture();
+  // robotun mövqeyi
+  let y=S.pos[0],x=S.pos[1];
+  if(S.cur&&S.cur.k==='move'){const p=Math.min(S.cur.t/S.cur.d,1),e=p*p*(3-2*p);x+=(S.cur.to[1]-x)*e;y+=(S.cur.to[0]-y)*e;}
+  let df=S.tang-S.ang;df=Math.atan2(Math.sin(df),Math.cos(df));S.ang+=df*.18;
+  const px=(x+.5)*cs,py=(y+.5)*cs;
+  if(S.cur&&S.cur.k==='clean'&&!reduce&&Math.random()<.5)S.parts.push({x:px,y:py,vx:(Math.random()-.5)*cs*.9,vy:(Math.random()-.5)*cs*.9,l:.6});
+  S.parts=S.parts.filter(p=>p.l>0);
+  S.parts.forEach(p=>{p.x+=p.vx*.016;p.y+=p.vy*.016;p.l-=.016;ctx.fillStyle=`rgba(255,255,255,${p.l/.6})`;ctx.beginPath();ctx.arc(p.x,p.y,cs*.025,0,7);ctx.fill();});
+  robot(px,py,t);
+}
+let last=0;
+function loop(ts){
+  const dt=Math.min((ts-last)/1000,.05);last=ts;
+  if(running&&!S.done)step(dt*speed);
+  draw(ts/1000);requestAnimationFrame(loop);
+}
+$('play').onclick=()=>{if(S.done){reset();return;}running=!running;ui();};
+$('reset').onclick=reset;
+$('spd').onchange=e=>{speed=+e.target.value;};
+addEventListener('resize',fit);
+fit();reset();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
